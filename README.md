@@ -17,7 +17,7 @@ You also need the `fhsae` and `sp_groupfunction` packages to replicate the resul
 
 You may run the do files and R scripts in the following order:
 
-1. `01.Codes/00.set_path.do` - Define paths
-2. `01.Codes/01.SVY_prep.do` - Prepare PECS2023 and the census data for Fay-Harriet estimation
-3. `01.Codes/02.FH_model_select.do` - Perform FH for West Bank only and for both West Bank and Gaza
+1. `01.Codes/Fay-Herriot/00.set_path.do` - Define paths
+2. `01.Codes/Fay-Herriot/01.SVY_prep.do` - Prepare PECS2023 and the census data for Fay-Harriet estimation
+3. `01.Codes/Fay-Herriot/02.FH_model_select.do` - Perform FH for West Bank only and for both West Bank and Gaza
 
