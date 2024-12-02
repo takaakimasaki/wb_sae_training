@@ -1,0 +1,308 @@
+//do file to run FH to produce SAE of poverty
+*****************************************
+set more off
+clear all
+
+version 15
+set matsize 8000
+set seed 648743
+*pwd 
+//make sure that your working directory is in FH
+run "00.set_path.do"
+
+global popwt "popwt" //weight 
+global psu "psu" //PSU
+global welfare "gall_ae" //welfare variable
+global pline "pline_g" //poverty line
+global pline_ext "pline_g" //need to revise this if need be
+global adm1 "region" //ADM1
+global hhsize "F_hhsize" //household size
+global sae_level "location_id2 location_id" //need to revise this if need be
+global census_list "C_* E_* F_* I_* D_*" //list of census variables used as predictors in FH. I ended up excluding labor and health variables because the heighest R2 was achieved after excluding them
+global svy "pecs_2023"
+global vars_geo "pop_dens ntl_2023 bldg_h_2018 bldg_v_2020" //list of geospatial variables used as predictors in FH
+global vars "${census_list} ${vars_geo}"
+global pop "pop"
+*global vif 0 //do not run VIF
+global gs 0 1 
+global dv "fgt0 fgt0_2"
+
+*===============================================================================
+//Specify team paths
+*===============================================================================
+foreach s of global sae_level {
+foreach v of global dv {
+foreach n of global gs {
+   * local v "fgt0"
+   * local s "location_id"
+   *	local n 0
+use "${github}/wb_sae_training/04.Data/FHcensus_`s'.dta", clear
+merge 1:1 `s' using "${github}/wb_sae_training/04.Data/census2017_`s'.dta"
+drop if _m == 2
+drop _m
+if `n' == 0 {
+    keep if Region_name == "West Bank"
+}
+
+foreach g of global vars_geo {
+	replace `g' = 0 if missing(`g')
+}
+
+//Normalize
+foreach x of global vars {
+	cap sum `x'
+	cap replace `x' = (`x' - r(mean))/r(sd)
+}
+
+merge 1:1 `s' using "${github}/wb_sae_training/04.Data/direct_`v'_${svy}_`s'.dta", nogen
+
+local vars "${vars}"
+unab hhvars: `vars'
+
+*===============================================================================
+//Create smoothed variance function
+*===============================================================================
+gen log_s2 = log(dir_`v'_var)
+gen logN = log(N)
+gen logN2 = logN^2
+gen logpop  = log(pop)
+gen logpop2 = logpop^2
+gen share = log(N_hhsize/pop)
+reg log_s2 share, r
+local phi2 = e(rmse)^2
+cap drop xb_fh
+predict xb_fh, xb
+predict residual,res
+sum xb_fh if res!=.,d
+gen exp_xb_fh = exp(xb_fh)
+sum dir_`v'_var
+local sumvar = r(sum)
+sum exp_xb_fh
+local sump = r(sum)
+
+//Below comes from: https://presidencia.gva.es/documents/166658342/168130165/Ejemplar+45-01.pdf/fb04aeb3-9ea6-441f-a15c-bc65e857d689?t=1557824876209#page=107
+gen smoothed_var = exp_xb_fh*(`sumvar'/`sump') 
+
+//Modified to only replace for the locations with 0 variance
+replace dir_`v'_var = smoothed_var if ((num_ea>1 & !missing(num_ea)) | (num_ea==1 & zero!=0 & zero!=1)) & missing(dir_`v'_var)
+replace dir_`v' = zero if !missing(dir_`v'_var)
+
+//remove collinear variables
+_rmcoll ${vars}, forcedrop //we need to run this first; otherwise, stepwise returns an error due to collinear variables.
+di "dropped variables: "`r(k_omitted)'
+global vars"`r(varlist)'"
+
+//Check VIF among variables
+reg dir_`v' $vars
+gen touse = e(sample)
+gen weight = 1
+mata: ds = _f_stepvif("$vars","weight",10,"touse") 
+	
+global postvif `vifvar'
+global vars $postvif
+
+stepwise, pr(0.05): reg dir_`v' ${vars} 
+local postsign : colfullnames e(b)	// stores names of remaining variables
+global postsign: subinstr local postsign "_cons" "", word	// drops "constant"
+
+/*
+//Removal of non-significant variables
+	//Removal of non-significant variables
+	forval z= 0.8(-0.05)0.05{
+		qui:  fhsae dir_`v' `hhvars', revar(dir_`v'_var) method(fh) nonegative
+		mata: bb=st_matrix("e(b)")
+		mata: se=sqrt(diagonal(st_matrix("e(V)")))
+		mata: zvals = bb':/se
+		mata: st_matrix("min",min(abs(zvals)))
+		local zv = (-min[1,1])
+		if (2*normal(`zv')<`z') exit	
+		foreach x of varlist `hhvars'{
+			local hhvars1
+			qui: fhsae dir_`v' `hhvars', revar(dir_`v'_var) method(fh) nonegative
+			qui: test `x' 
+			if (r(p)>`z'){
+				local hhvars1
+				foreach yy of local hhvars{
+					if ("`yy'"=="`x'") dis ""
+					else local hhvars1 `hhvars1' `yy'
+				}
+				}
+			else local hhvars1 `hhvars'
+			local hhvars `hhvars1'		
+		}
+	}	
+
+	
+	//Global with non-significant variables removed
+	global postsign `hhvars'
+	*/
+/*	
+	//Final model without non-significant variables no funcion
+	fhsae dir_`v' ${postsign}, revar(dir_`v'_var) method(fh)
+	*/
+	
+
+
+	/*
+	//One final removal of non-significant covariates
+	forval z= 0.8(-0.05)0.0001{
+		qui:fhsae dir_`v' `hhvars', revar(dir_`v'_var) method(reml) precision(1e-10)
+		mata: bb=st_matrix("e(b)")
+		mata: se=sqrt(diagonal(st_matrix("e(V)")))
+		mata: zvals = bb':/se
+		mata: st_matrix("min",min(abs(zvals)))
+		local zv = (-min[1,1])
+		if (2*normal(`zv')>=`z'){
+			foreach x of varlist `hhvars'{
+				local hhvars1
+				qui: fhsae dir_`v' `hhvars', revar(dir_`v'_var) method(reml) precision(1e-10)
+				qui: test `x' 
+				if (r(p)>`z'){
+					local hhvars1
+					foreach yy of local hhvars{
+						if ("`yy'"=="`x'") dis ""
+						else local hhvars1 `hhvars1' `yy'
+					}
+				}
+				else local hhvars1 `hhvars'
+				local hhvars `hhvars1'		
+			}
+		}
+	}
+	*/
+	
+	
+	*fhsae dir_`v' `hhvars', revar(dir_`v'_var) method(reml) precision(1e-10)
+	global last $postsign
+
+	/*save first stage regression results*/
+	*postfile output str20 v b se pval ll ul r2_a n_obs using "${github_quarto}/tables/fh_first_stage_`v'_`n'_`s'.dta", replace 
+	postfile output str20 v b se pval ll ul r2_a n_obs using "${github}/wb_sae_training/04.Data/fh_first_stage_`v'_`n'_`s'.dta", replace 
+	reg dir_`v'  $last
+	local ind_vars : colfullnames e(b)
+	di "`ind_vars'"
+	tokenize "`ind_vars'"
+	local m = 0
+	foreach var of local ind_vars {
+	    local m = `m' + 1
+		di "`var'"
+		local var_`m' "`var'"
+		di "`var_`m''"
+	}
+	local n_obs = e(N) 
+	local r2_a = e(r2_a)
+	matrix table = r(table)
+	matrix b=e(b)
+	matrix v=e(V)
+	forv t = 1/`=colsof(table)' {
+		local b_`t' = table[1, `t'] 
+		local se_`t' = table[2, `t'] 
+		local z_`t' = table[3, `t'] 
+		local pval_`t' = table[4, `t'] 
+		local ll_`t' = table[5, `t'] 
+		local ul_`t' = table[6, `t']  
+		post output ("`var_`t''") (`b_`t'') (`se_`t'') (`pval_`t'') (`ll_`t'') (`ul_`t'') (`r2_a') (`n_obs')
+	}
+	postclose output
+	
+	
+	fhsae dir_`v'  $last, revar(dir_`v'_var) method(chandra)
+	fhsae dir_`v'  $last, revar(dir_`v'_var) method(fh)
+	fhsae dir_`v'  $last, revar(dir_`v'_var) method(reml)
+//*********************************************************************************************//
+
+	//Obtain SAE-FH-estimates	
+	fhsae dir_`v'  $last, revar(dir_`v'_var) method(reml) fh(fh_`v') ///
+	fhse(fh_`v'_se) fhcv(fh_`v'_cv) gamma(fh_`v'_gamma) out noneg precision(1e-13)
+
+
+	//Check normal errors
+	predict xb
+	gen u_d = fh_`v' - xb
+		lab var u_d "FH area effects"
+	
+	histogram u_d, normal graphregion(color(white))
+	graph export "${github}/wb_sae_training/05.Figures/Fig1_left_`v'_`n'_`s'.png", as(png) replace
+	cap graph export "${github_quarto}/figures/Fig1_left_`v'_`n'_`s'.png", as(png) replace
+	qnorm u_d, graphregion(color(white))
+	
+	gen e_d = dir_`v' - fh_`v'
+		lab var e_d "FH errors"
+	
+	histogram e_d, normal graphregion(color(white))
+	graph export "${github}/wb_sae_training/05.Figures/Fig1_right_`v'_`n'_`s'.png", as(png) replace
+	cap graph export "${github_quarto}/figures/Fig1_right_`v'_`n'_`s'.png", as(png) replace
+	qnorm e_d, graphregion(color(white))
+
+keep region `s' fh_`v' fh_`v'_se
+lab var fh_`v' "Fay-Herriot small area estimate of poverty (FGT0)"
+lab var fh_`v'_se "RMSE of Fay-Herriot small area estimate of poverty (FGT0)"
+save "${github}/wb_sae_training/04.Data/FH_sae_poverty_`v'_`n'_`s'.dta", replace
+
+**************************************************************************************
+*check results
+**************************************************************************************
+use  "${github}/wb_sae_training/04.Data/direct_`v'_${svy}_`s'.dta", clear
+gen u_ci = fgt0+invnormal(0.975)*sqrt(dir_`v'_var)
+gen l_ci = fgt0+invnormal(0.025)*sqrt(dir_`v'_var)
+
+gen u_ci90 = fgt0+invnormal(0.95)*sqrt(dir_`v'_var)
+gen l_ci90 = fgt0+invnormal(0.05)*sqrt(dir_`v'_var)
+
+*keep region fgt0 l_ci* u_ci* dir_`v'
+list
+rename fgt0 direct_`v'
+
+tempfile direct
+save `direct'
+
+use "${github}/wb_sae_training/04.Data/FH_sae_poverty_`v'_`n'_`s'.dta", clear
+merge m:1 `s' using `direct'
+	drop if _m==2
+	drop _m
+	
+merge m:1 `s' using "${github}/wb_sae_training/04.Data/FHcensus_`s'.dta"
+	drop if _m==2
+	drop _m
+	
+merge m:1 `s' using "${github}/wb_sae_training/04.Data/zonal_stats_`s'.dta"
+	drop if _m==2
+	drop _m
+	
+merge 1:1 `s' using "${github}/wb_sae_training/04.Data/census2017_`s'.dta"
+	drop if _m==2
+	drop _m
+
+//See the improvement in precision
+gen se=sqrt(dir_`v'_var)
+twoway (scatter fh_`v'_se se ) (line se se), graphregion(color(white)) ytitle(Fay Herriot (rmse)) xtitle(Direct estimate (SE)) legend(off)
+graph export "${github}/wb_sae_training/05.Figures/Fig2_left_`v'_`n'_`s'.png", as(png) replace
+cap graph export "${github_quarto}/figures/Fig2_right_`v'_`n'_`s'.png", as(png) replace //export results to Quarto
+
+twoway (scatter fh_`v' dir_`v') (line fh_`v' fh_`v'), graphregion(color(white)) ytitle(Fay Herriot) xtitle(Direct estimate) legend(off)
+graph export "${github}/wb_sae_training/05.Figures/Fig2_right_`v'_`n'_`s'.png", as(png) replace
+cap graph export "${github_quarto}/figures/Fig2_left_`v'_`n'_`s'.png", as(png) replace //export results to Quarto
+
+replace povrate_2017 = povrate_2017/100
+
+if "`v'=="fgt0" {
+twoway (scatter fh_`v' povrate_2017) (line fh_`v' fh_`v'), graphregion(color(white)) ytitle(Fay Herriot) xtitle(2017 poverty rate) legend(off)
+graph export "${github}/wb_sae_training/05.Figures/Fig3_`v'_`n'_`s'.png", as(png) replace
+cap graph export "${github_quarto}/figures/Fig3_`v'_`n'_`s'.png", as(png) replace //export results to Quarto
+}
+
+gsort - fh_`v'
+lab var direct_`v' "Direct estimates of poverty from PECS2023"
+lab var N "N of HH in PECS2023"
+lab var popwt "Sum of population weights in PECS2023"
+lab var N_hhsize "N x hhsize"
+lab var se "SE of direct estimates"
+lab var num_ea "N of EAs in PECS2023"
+save "${github}/wb_sae_training/04.Data/pov_data_2023_`v'_`n'_`s'.dta", replace
+}
+}
+}
+
+
+/*check first stage regressions*/
+use "${github}/wb_sae_training/04.Data/fh_first_stage_fgt0_1_location_id.dta", clear

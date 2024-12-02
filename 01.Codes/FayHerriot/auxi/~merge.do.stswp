@@ -1,0 +1,35 @@
+*replace locationid for those areas with zero poverty
+**10 locations had zero poverty so we merged them with their neighbors. 
+/*
+*1452255
+*1452265
+*1301785
+*1251425
+*1010060
+*1301635
+*1301790
+*1452210
+*1502630
+*1010465
+*/
+
+clonevar location_id2 = location_id
+replace location_id2 = 1010215 if location_id2 == 1010060
+replace location_id2 = 1010370 if location_id2 == 1010465
+replace location_id2 = 1251370 if location_id2 == 1251425
+replace location_id2 = 1301610 if location_id2 == 1301635
+replace location_id2 = 1301810 if location_id2 == 1301790
+replace location_id2 = 1301610 if location_id2 == 1301785
+replace location_id2 = 1452230 if location_id2 == 1452210
+replace location_id2 = 1452240 if location_id2 == 1452255
+replace location_id2 = 1452240 if location_id2 == 1452265
+replace location_id2 = 1502450 if location_id2 == 1502630
+
+**after merging the 10 locations and re-running FH, we still got 6 locations with zero poverty so decided to further merge these six locations with their neighbors.
+replace location_id2 = 1010370 if location_id2 == 1010265 /*changed this because no obs in 1010370 and merging 1010465 to 1010370 still produces a poverty rate of zero*/
+replace location_id2 = 1010340 if location_id2 == 1010215 /*changed this because no obs in 1010215 and merging 1010060 to 1010215 still produces a poverty rate of zero*/
+
+replace location_id2 = 1050610 if location_id2 == 1050535 /*zero poverty and thus merge with neighboring area*/
+replace location_id2 = 1151365 if location_id2 == 1151335 /*zero poverty and thus merge with neighboring area*/
+replace location_id2 = 1452325 if location_id2 == 1502540 /*zero poverty and thus merge with neighboring area*/
+replace location_id2 = 1502640 if location_id2 == 1502615 /*zero poverty and thus merge with neighboring area*/
